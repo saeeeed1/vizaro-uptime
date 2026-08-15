@@ -1,0 +1,33 @@
+name: Keepalive
+
+# NEGA BU KERAK (aks holda monitoring jimgina o'ladi):
+# GitHub public repo'da 60 kun davomida hech qanday commit bo'lmasa, cron
+# workflow'larni AVTOMATIK o'chirib qo'yadi. Ya'ni uptime.yml o'zi ishlab
+# tursa ham, 2 oydan keyin to'xtaydi va Muhammad buni sayt o'chganda biladi.
+# Bu workflow oyiga bir marta bo'sh commit qilib repo'ni "faol" holatda tutadi.
+#
+# Kerak bo'lmasa bu faylni o'chirib tashlash mumkin — lekin u holda GitHub'dan
+# keladigan "workflow disabled" xatini qo'ldan o'tkazib yubormaslik kerak.
+
+on:
+  schedule:
+    - cron: "17 3 1 * *"   # har oyning 1-kuni, 03:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bo'sh commit
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --allow-empty -m "chore: keepalive (cron o'chib qolmasin)"
+          git push

@@ -1,0 +1,205 @@
+name: Uptime
+
+# Har 5 daqiqada v1zaro.com tekshiriladi. Sayt o'chsa — Telegram'ga BIR MARTA
+# xabar; qaytganda yana bir marta. Holat GitHub Issue orqali saqlanadi (pastga
+# qarang), shuning uchun 2 soatlik uzilishda 24 ta emas, 2 ta xabar keladi.
+on:
+  schedule:
+    # GitHub'ning cron'i "eng yaxshi harakat" asosida ishlaydi: yuklama vaqtida
+    # 5-15 daqiqa kechikishi normal. Ya'ni bu "kafolatlangan har 5 daqiqa" emas.
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      test_telegram:
+        description: "Faqat Telegram'ni sinash (sayt tekshirilmaydi, holat o'zgarmaydi)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write        # holat shu yerda saqlanadi
+
+concurrency:
+  group: uptime
+  cancel-in-progress: false   # xabar yuborilayotgan run hech qachon uzilmasin
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SITE_URL: "https://v1zaro.com/"
+      API_URL: "https://v1zaro.com/api/bootstrap"
+      # Sahifa HAQIQATAN yuklanganini isbotlaydigan belgi. 200 yetarli emas:
+      # nginx xato sahifasi, bo'sh javob yoki "maintenance" sahifasi ham 200
+      # bo'lishi mumkin. Bu marker index.html ichida doim bor (login formasi).
+      PAGE_MARKER: 'id="loginForm"'
+      DOWN_LABEL: "uptime-down"
+
+    steps:
+      - name: Telegram sinovi (faqat qo'lda ishga tushirilganda)
+        if: inputs.test_telegram
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          set -uo pipefail
+          if [ -z "${TG_TOKEN:-}" ] || [ -z "${TG_CHAT:-}" ]; then
+            echo "::error::TELEGRAM_BOT_TOKEN yoki TELEGRAM_CHAT_ID sozlanmagan."
+            exit 1
+          fi
+          code=$(curl -sS -o /tmp/tg.out -w '%{http_code}' --max-time 20 \
+            -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+            -d chat_id="${TG_CHAT}" \
+            --data-urlencode "text=✅ Sinov xabari — uptime monitoring ishlayapti. Sayt tekshirilmadi." \
+            -d disable_web_page_preview=true) || code="000"
+          if [ "$code" != "200" ]; then
+            # Telegram javobida token YO'Q (faqat "description"), shuning uchun
+            # ko'rsatish xavfsiz va xatoni tushunishga yordam beradi.
+            echo "::error::Telegram javobi HTTP $code"
+            head -c 300 /tmp/tg.out
+            exit 1
+          fi
+          echo "Sinov xabari yuborildi."
+
+      - name: Saytni tekshirish
+        if: ${{ !inputs.test_telegram }}
+        id: probe
+        run: |
+          set -uo pipefail   # `-e` YO'Q: xatolarni o'zimiz hal qilamiz
+                             # `-x` YO'Q: sirlar log'ga tushmasin
+
+          # Bir marta javob bermaslik — uzilish emas. Uch urinish, oralarida 20s:
+          # qisqa tarmoq uzilishi, deploy paytidagi restart (~2s) va provayder
+          # blipi shu bilan filtrlanadi; haqiqiy uzilish uchalasida ham qoladi.
+          attempts=3
+          gap=20
+          ok=0
+          reason=""
+
+          for i in $(seq 1 "$attempts"); do
+            reason=""
+
+            # 1) Bosh sahifa: 200 VA mazmun
+            code=$(curl -sS -o /tmp/home.html -w '%{http_code}' --max-time 20 "$SITE_URL") || code="000"
+            if [ "$code" != "200" ]; then
+              reason="Bosh sahifa javob bermadi (HTTP $code)"
+            elif ! grep -qF "$PAGE_MARKER" /tmp/home.html; then
+              reason="Bosh sahifa 200 qaytardi, lekin sahifa mazmuni yo'q"
+            fi
+
+            # 2) Ilova qatlami: nginx tirik, lekin Python xizmati o'lgan bo'lishi
+            #    mumkin — bu tekshiruvsiz sezilmay qoladi.
+            if [ -z "$reason" ]; then
+              code=$(curl -sS -o /tmp/api.json -w '%{http_code}' --max-time 20 "$API_URL") || code="000"
+              if [ "$code" != "200" ]; then
+                reason="API javob bermadi (HTTP $code)"
+              elif ! python3 -c "import json,sys; sys.exit(0 if json.load(open('/tmp/api.json')).get('serverTime') else 1)" 2>/dev/null; then
+                reason="API 200 qaytardi, lekin javob yaroqsiz"
+              fi
+            fi
+
+            if [ -z "$reason" ]; then ok=1; echo "Urinish $i/$attempts: OK"; break; fi
+            echo "Urinish $i/$attempts: $reason"
+            if [ "$i" -lt "$attempts" ]; then sleep "$gap"; fi
+          done
+
+          if [ "$ok" = "1" ]; then
+            echo "status=up" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=down" >> "$GITHUB_OUTPUT"
+            # `reason` bir qatorli va nazorat ostidagi matn (URL/sir emas).
+            echo "reason=$reason" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Holatni solishtirish va xabar berish
+        if: ${{ !inputs.test_telegram }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+          STATUS: ${{ steps.probe.outputs.status }}
+          REASON: ${{ steps.probe.outputs.reason }}
+          REPO: ${{ github.repository }}
+          RUN_URL: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        run: |
+          set -uo pipefail
+
+          # ── Xabar yuborish ───────────────────────────────────────────────
+          # Token faqat env orqali va faqat URL ichida ishlatiladi; hech qayerda
+          # echo qilinmaydi, `set -x` yoqilmagan. GitHub sir qiymatlarini log'da
+          # avtomatik yulduzcha bilan yopadi — bu ikkinchi qatlam.
+          send_tg() {
+            if [ -z "${TG_TOKEN:-}" ] || [ -z "${TG_CHAT:-}" ]; then
+              echo "::warning::Telegram sirlari sozlanmagan — xabar yuborilmadi."
+              return 1
+            fi
+            code=$(curl -sS -o /tmp/tg.out -w '%{http_code}' --max-time 20 \
+              -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+              -d chat_id="${TG_CHAT}" \
+              --data-urlencode "text=$1" \
+              -d disable_web_page_preview=true) || code="000"
+            if [ "$code" != "200" ]; then
+              echo "::error::Telegram xabari yuborilmadi (HTTP $code)"
+              head -c 300 /tmp/tg.out
+              return 1
+            fi
+            echo "Telegram xabari yuborildi."
+          }
+
+          now=$(date -u '+%Y-%m-%d %H:%M UTC')
+
+          # ── Holat: ochiq Issue bormi? ────────────────────────────────────
+          # GitHub'da fayl yozib holat saqlash noqulay (har tekshiruv commit
+          # qilardi). Ochiq Issue = "hozir o'chiq", yopilgan = "ishlayapti".
+          # Yagona GITHUB_TOKEN yetadi, qo'shimcha sir kerak emas, ustiga
+          # uzilishlar tarixi o'zi hosil bo'ladi.
+          issue=$(gh issue list --repo "$REPO" --label "$DOWN_LABEL" \
+                    --state open --limit 1 --json number --jq '.[0].number // empty')
+          gh_rc=$?
+          if [ "$gh_rc" -ne 0 ]; then
+            echo "::error::GitHub Issues o'qib bo'lmadi — monitor holatini aniqlay olmadi."
+            exit 1
+          fi
+
+          if [ "$STATUS" = "down" ]; then
+            if [ -n "$issue" ]; then
+              # TAKRORIY XABAR YO'Q: uzilish allaqachon e'lon qilingan.
+              echo "Sayt hali ham o'chiq. #$issue ochiq — takroriy xabar yuborilmaydi."
+              exit 0
+            fi
+            gh label create "$DOWN_LABEL" --repo "$REPO" --color B60205 \
+              --description "Sayt o'chiq (uptime monitor)" >/dev/null 2>&1 || true
+            body=$(printf '%s\n' \
+              "**Sayt javob bermayapti.**" "" \
+              "- Vaqt: $now" \
+              "- Sabab: $REASON" \
+              "- Tekshiruv: $RUN_URL" "" \
+              "Sayt qaytganda bu issue avtomatik yopiladi.")
+            if ! gh issue create --repo "$REPO" --label "$DOWN_LABEL" \
+                   --title "🔴 v1zaro.com javob bermayapti" --body "$body" >/dev/null; then
+              echo "::error::Issue yaratilmadi — holat saqlanmadi."
+              exit 1
+            fi
+            # printf bilan quriladi: YAML blok skalyari ichida xabar qatorlari
+            # 0-ustundan boshlansa, blok o'sha yerda tugab qolar edi.
+            msg=$(printf '🔴 v1zaro.com javob bermayapti\n\nVaqt: %s\nSabab: %s\n\n3 marta urinildi, uchalasi ham muvaffaqiyatsiz.\nBatafsil: %s' \
+                    "$now" "$REASON" "$RUN_URL")
+            send_tg "$msg" || exit 1
+            exit 0
+          fi
+
+          # ── Sayt ishlayapti ──────────────────────────────────────────────
+          if [ -z "$issue" ]; then
+            echo "Sayt ishlayapti (oldin ham ishlagan) — xabar kerak emas."
+            exit 0
+          fi
+          # QAYTDI: bir marta xabar + issue yopiladi.
+          msg=$(printf '✅ v1zaro.com yana ishlayapti\n\nVaqt: %s\nSayt va API tekshiruvdan o%stdi.' "$now" "'")
+          send_tg "$msg" || true
+          gh issue close "$issue" --repo "$REPO" \
+            --comment "Sayt $now da qayta ishga tushdi." >/dev/null || {
+              echo "::error::Issue yopilmadi — keyingi tekshiruv uni ochiq deb ko'radi."
+              exit 1
+            }
+          echo "Sayt qaytdi, #$issue yopildi."
