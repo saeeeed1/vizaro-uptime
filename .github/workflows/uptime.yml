@@ -66,8 +66,13 @@ jobs:
         if: ${{ !inputs.test_telegram }}
         id: probe
         run: |
-          set -uo pipefail   # `-e` YO'Q: xatolarni o'zimiz hal qilamiz
-                             # `-x` YO'Q: sirlar log'ga tushmasin
+          # DIQQAT: GitHub bu qadamni `bash -e {0}` bilan ishga tushiradi, ya'ni
+          # `-e` YOQILGAN va `set -uo pipefail` uni O'CHIRMAYDI (buning uchun
+          # `set +e` kerak bo'lardi). Shuning uchun yiqilishi mumkin bo'lgan har
+          # bir buyruq `|| ...` bilan ushlanishi SHART — aks holda qadam o'sha
+          # qatorda jimgina o'ladi va quyidagi xato-ishlov ishlamaydi.
+          # `-x` YO'Q: sirlar log'ga tushmasin.
+          set -uo pipefail
 
           # Bir marta javob bermaslik — uzilish emas. Uch urinish, oralarida 20s:
           # qisqa tarmoq uzilishi, deploy paytidagi restart (~2s) va provayder
@@ -123,6 +128,7 @@ jobs:
           REPO: ${{ github.repository }}
           RUN_URL: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
         run: |
+          # `-e` bu yerda ham YOQILGAN (yuqoridagi izohga qarang).
           set -uo pipefail
 
           # ── Xabar yuborish ───────────────────────────────────────────────
@@ -154,11 +160,24 @@ jobs:
           # qilardi). Ochiq Issue = "hozir o'chiq", yopilgan = "ishlayapti".
           # Yagona GITHUB_TOKEN yetadi, qo'shimcha sir kerak emas, ustiga
           # uzilishlar tarixi o'zi hosil bo'ladi.
+          # `|| gh_rc=$?` SHART: `-e` yoqilgani uchun himoyasiz qoldirilsa qadam
+          # shu qatorda o'lardi va quyidagi tekshiruv hech qachon ishlamasdi.
+          # `gh_rc` oldindan e'lon qilinadi — `set -u` da e'lonsiz o'qish xato.
+          gh_rc=0
           issue=$(gh issue list --repo "$REPO" --label "$DOWN_LABEL" \
-                    --state open --limit 1 --json number --jq '.[0].number // empty')
-          gh_rc=$?
+                    --state open --limit 1 --json number --jq '.[0].number // empty') || gh_rc=$?
           if [ "$gh_rc" -ne 0 ]; then
-            echo "::error::GitHub Issues o'qib bo'lmadi — monitor holatini aniqlay olmadi."
+            # GitHub'ning O'Z API'si javob bermadi (kuzatilgan: HTTP 503).
+            # Sayt ishlayotgan bo'lsa bu UZILISH EMAS — monitoring o'z ichki
+            # nosozligini uzilish deb e'lon qilmasligi kerak, aks holda "hammasi
+            # yiqildi" xati keladi va sayt aslida joyida bo'ladi.
+            if [ "$STATUS" != "down" ]; then
+              echo "::warning::GitHub Issues o'qib bo'lmadi (GitHub API). Sayt tekshiruvdan O'TDI, shuning uchun bu uzilish emas — keyingi tekshiruv qayta uriniladi."
+              exit 0
+            fi
+            # Sayt O'CHIQ va holatni o'qiy olmadik: allaqachon xabar berilgan-
+            # berilmaganini bilmaymiz. Bu jimgina o'tkazib yuborilmasin.
+            echo "::error::Sayt javob bermayapti VA GitHub Issues o'qib bo'lmadi — holat aniqlanmadi."
             exit 1
           fi
 
@@ -168,6 +187,18 @@ jobs:
               echo "Sayt hali ham o'chiq. #$issue ochiq — takroriy xabar yuborilmaydi."
               exit 0
             fi
+            # ── TARTIB: XABAR BIRINCHI ──────────────────────────────────
+            # Issue — buxgalteriya, Telegram — ishning o'zi. Avval issue
+            # yaratilsa va u yiqilsa, xabar UMUMAN ketmasdi: sayt o'chiq, lekin
+            # hech kim bilmaydi. Shuning uchun avval xabar, keyin holat.
+            # printf bilan quriladi: YAML blok skalyari ichida xabar qatorlari
+            # 0-ustundan boshlansa, blok o'sha yerda tugab qolar edi.
+            msg=$(printf '🔴 v1zaro.com javob bermayapti\n\nVaqt: %s\nSabab: %s\n\n3 marta urinildi, uchalasi ham muvaffaqiyatsiz.\nBatafsil: %s' \
+                    "$now" "$REASON" "$RUN_URL")
+            tg_ok=1
+            send_tg "$msg" || tg_ok=0
+
+            # ── Holatni saqlash (xabardan KEYIN) ────────────────────────
             gh label create "$DOWN_LABEL" --repo "$REPO" --color B60205 \
               --description "Sayt o'chiq (uptime monitor)" >/dev/null 2>&1 || true
             body=$(printf '%s\n' \
@@ -176,16 +207,18 @@ jobs:
               "- Sabab: $REASON" \
               "- Tekshiruv: $RUN_URL" "" \
               "Sayt qaytganda bu issue avtomatik yopiladi.")
-            if ! gh issue create --repo "$REPO" --label "$DOWN_LABEL" \
-                   --title "🔴 v1zaro.com javob bermayapti" --body "$body" >/dev/null; then
-              echo "::error::Issue yaratilmadi — holat saqlanmadi."
+            issue_ok=1
+            gh issue create --repo "$REPO" --label "$DOWN_LABEL" \
+              --title "🔴 v1zaro.com javob bermayapti" --body "$body" >/dev/null || issue_ok=0
+            if [ "$issue_ok" = "0" ]; then
+              echo "::error::Issue yaratilmadi — holat saqlanmadi. Xabar YUBORILDI, lekin keyingi tekshiruv uni takrorlaydi."
+            fi
+
+            # Sayt O'CHIQ: xabar ketmagan YOKI holat saqlanmagan bo'lsa qadam
+            # yiqilsin — GitHub xati kelsin, biz bilaylik.
+            if [ "$tg_ok" = "0" ] || [ "$issue_ok" = "0" ]; then
               exit 1
             fi
-            # printf bilan quriladi: YAML blok skalyari ichida xabar qatorlari
-            # 0-ustundan boshlansa, blok o'sha yerda tugab qolar edi.
-            msg=$(printf '🔴 v1zaro.com javob bermayapti\n\nVaqt: %s\nSabab: %s\n\n3 marta urinildi, uchalasi ham muvaffaqiyatsiz.\nBatafsil: %s' \
-                    "$now" "$REASON" "$RUN_URL")
-            send_tg "$msg" || exit 1
             exit 0
           fi
 
@@ -199,7 +232,11 @@ jobs:
           send_tg "$msg" || true
           gh issue close "$issue" --repo "$REPO" \
             --comment "Sayt $now da qayta ishga tushdi." >/dev/null || {
-              echo "::error::Issue yopilmadi — keyingi tekshiruv uni ochiq deb ko'radi."
-              exit 1
+              # Sayt ISHLAYAPTI va "qaytdi" xabari yuqorida allaqachon yuborildi.
+              # Bu faqat GitHub tomonidagi buxgalteriya nosozligi — uzilish emas,
+              # shuning uchun qadam yiqilmaydi. Oqibati: issue ochiq qoladi va
+              # keyingi tekshiruv yana bir "qaytdi" xabarini yuboradi.
+              echo "::warning::Issue yopilmadi (GitHub API) — ochiq qoldi, keyingi tekshiruv qayta uriniladi."
+              exit 0
             }
           echo "Sayt qaytdi, #$issue yopildi."

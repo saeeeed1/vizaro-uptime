@@ -1,7 +1,9 @@
 # vizaro-uptime
 
-**v1zaro.com** saytini har 5 daqiqada tekshiradi. Sayt o'chsa — Telegram'ga xabar
-yuboradi, qaytganda yana bir marta xabar beradi. Boshqa hech narsa qilmaydi.
+**v1zaro.com** saytini muntazam tekshiradi. Jadval har **5 daqiqaga** qo'yilgan,
+lekin GitHub uni "eng yaxshi harakat" asosida yuritadi — amalda o'lchangan
+mediana **26 daqiqa** («Bilib qo'yish kerak» bo'limiga qarang). Sayt o'chsa —
+Telegram'ga xabar yuboradi, qaytganda yana bir marta. Boshqa hech narsa qilmaydi.
 
 GitHub Actions **public repo'da butunlay bepul** — soatlik cheklov yo'q.
 
@@ -127,9 +129,13 @@ yig'ilib boradi — qachon o'chgan, qancha turgan.
 
 ## Bilib qo'yish kerak
 
-- **Cron aniq 5 daqiqa emas.** GitHub jadval bo'yicha ishga tushirishni "eng
-  yaxshi harakat" asosida bajaradi; band vaqtlarda 5–15 daqiqa kechikishi
-  normal. Ya'ni uzilish o'rtacha 5–20 daqiqada sezilади.
+- **Cron aniq 5 daqiqa emas — amalda ancha siyrak.** GitHub jadval bo'yicha ishga
+  tushirishni "eng yaxshi harakat" asosida bajaradi. `uptime.yml` da e'lon
+  qilingani — har **5 daqiqa**; 2026-08-18 da o'lchangani (136 ta jadvalli run,
+  15–18 avgust): **mediana 26 daqiqa**, o'rtacha 30, eng uzun tanaffus **109
+  daqiqa**, 1 soatdan uzun tanaffus 6 marta. Ya'ni uzilish odatda yarim soatda,
+  yomon holatda ~1,5 soatda seziladi. Buni sozlab bo'lmaydi — bu GitHub'ning
+  bepul jadvali; haqiqatan 5 daqiqa kerak bo'lsa, tashqi xizmat kerak.
 - **Sayt o'chganda GitHub xat yubormaydi** — bu ataylab. Aks holda har 5
   daqiqada bitta xat kelib, pochtani to'ldirib yuborardi. Xabar kanali —
   Telegram. GitHub xati faqat **monitoringning o'zi buzilganda** keladi (bu esa
