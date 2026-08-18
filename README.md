@@ -149,6 +149,10 @@ yig'ilib boradi — qachon o'chgan, qancha turgan.
   o'chirib qo'yadi. Shuning uchun `keepalive.yml` oyiga bir marta bo'sh commit
   qiladi. Uni o'chirsangiz — GitHub'ning ogohlantirish xatini o'tkazib
   yubormang.
+- **`actions/checkout@v4` eskirmoqda.** 2026-08-18 da qo'lda sinalganda keepalive
+  MUVAFFAQIYATLI o'tdi, lekin GitHub ogohlantirdi: v4 Node.js 20 ni nishonga oladi,
+  u eskirgan va GitHub uni majburan Node 24 da yuritmoqda. Hozircha ishlaydi —
+  majburiy yuritish to'xtaganda **`actions/checkout@v5`** ga ko'tarish kerak.
 
 ## Sirlar xavfsizligi
 
