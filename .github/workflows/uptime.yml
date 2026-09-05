@@ -29,7 +29,8 @@ jobs:
     timeout-minutes: 10
     env:
       SITE_URL: "https://v1zaro.com/"
-      API_URL: "https://v1zaro.com/api/bootstrap"
+      # 2026-09-05: /api/bootstrap endi sessiyasiz 401 (bo'sh tana) — monitor /api/health'ga o'tdi.
+      API_URL: "https://v1zaro.com/api/health"
       # Sahifa HAQIQATAN yuklanganini isbotlaydigan belgi. 200 yetarli emas:
       # nginx xato sahifasi, bo'sh javob yoki "maintenance" sahifasi ham 200
       # bo'lishi mumkin. Bu marker index.html ichida doim bor (login formasi).
@@ -99,7 +100,7 @@ jobs:
               code=$(curl -sS -o /tmp/api.json -w '%{http_code}' --max-time 20 "$API_URL") || code="000"
               if [ "$code" != "200" ]; then
                 reason="API javob bermadi (HTTP $code)"
-              elif ! python3 -c "import json,sys; sys.exit(0 if json.load(open('/tmp/api.json')).get('serverTime') else 1)" 2>/dev/null; then
+              elif ! python3 -c "import json,sys; sys.exit(0 if json.load(open('/tmp/api.json')).get('time') else 1)" 2>/dev/null; then
                 reason="API 200 qaytardi, lekin javob yaroqsiz"
               fi
             fi
